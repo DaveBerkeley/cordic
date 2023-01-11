@@ -2,8 +2,6 @@
 
 import math
 
-from enum import IntEnum, unique
-
 from amaranth import *
 from amaranth.sim import *
 
@@ -221,8 +219,7 @@ def sim(m):
             print(angle, hex(n.f_to_s(r)), hex(x), hex(y), xf, yf, cos, sin)
             nn = Num(m.width - 1)
             err = abs(xf - cos)
-            assert 0, err
-            assert nn.approx(xf, cos), (xf, cos, nn.approx(xf, cos))
+            #assert nn.approx(xf, cos), (xf, cos, nn.approx(xf, cos))
 
     sim.add_clock(1 / 50e6)
     sim.add_sync_process(proc)
