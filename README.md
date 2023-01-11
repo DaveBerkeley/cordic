@@ -2,7 +2,7 @@ CORDIC Engine
 =============
 
 Implementation of 
-[CORDIC](ttps://en.wikibooks.org/w/index.php?title=Digital_Circuits/CORDIC)
+[CORDIC](https://en.wikibooks.org/w/index.php?title=Digital_Circuits/CORDIC)
 in 
 [Amaranth](https://github.com/amaranth-lang/amaranth).
 
