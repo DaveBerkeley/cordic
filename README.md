@@ -16,10 +16,60 @@ The core of the engine is described by the following block diagram :
 
 The initial x0, y0 and z0 values are loaded in. x0 and y0 are the initial sin & cos values. z0 is the desired phase angle in radians. The engine is clocked for a number of iterations, the x and y outputs are the cos and sin of the desired angle.
 
-The table of incremental rotations are shown here as _α_. These are stored as an Array ofconstants, indexed by the iteration number.
+The table of incremental rotations are shown here as _α_. These are stored as an Array of constants, indexed by the iteration number.
 
 The algorithm has a gain of K, so if x0 is loaded with 1.0/K and y0 with 0.0, the output will be scaled to unity gain. The number representation is signed fixed point integer. The bit-width of the engine can be specified. The numbers +1.999 to -1.999 can be represented internally.
 
 The unit can calculate sin/cos in the first quadrant (0 .. 90 degrees).
+
+----
+
+4 quadrant operation
+----
+
+In order to operate across all four quadrants, the input and output data need to be modified. This can be acheived as follows :
+
+<div>
+<table>
+    <tr>
+        <td>quadrant</td>
+        <td>input</td>
+        <td>cos</td>
+        <td>sin</td>
+    </tr>
+    <tr>
+        <td>0 .. 90</td>
+        <td>angle</td>
+        <td>x</td>
+        <td>y</td>
+    </tr>
+    <tr>
+        <td>90 .. 180</td>
+        <td>angle - 90</td>
+        <td>-y</td>
+        <td>x</td>
+    </tr>
+    <tr>
+        <td>180 .. 270</td>
+        <td>angle - 180</td>
+        <td>-x</td>
+        <td>-y</td>
+    </tr>
+    <tr>
+        <td>270 .. 360</td>
+        <td>angle - 270</td>
+        <td>y</td>
+        <td>-x</td>
+    </tr>
+</table>
+</div>
+
+The input needs a conversion from rotation angle to radians, in signed fixed point format. The output needs to apply a correction based on the quadrant. This requires a single multiplier on the input stage to convert to radians by multiplying by pi/2. The output stage needs a pair of multiplexers and signed adders.
+
+The input rotation angle is simply an unsigned binary number, representing an angle from 0 .. 360 degrees. This could be a timer, a counter, data from a shaft encoder etc.
+
+The (angle - xx) is just a mod operation, so you can simply use the top 2 bits for the quadrant and the reset of the bits are the input theta.
+
+----
 
 1. Volder, Jack E. (1959-03-03). "The CORDIC Computing Technique"
