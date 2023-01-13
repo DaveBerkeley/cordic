@@ -257,7 +257,7 @@ class SinCos(Elaboratable):
 
         # Compensate for the CORDIC gain K
         n = Num(outwidth)
-        self.x0 = Const(n.f_to_s(1.0 / self.cordic.K))
+        self.x0 = Const(n.f_to_s(2.0 / self.cordic.K))
 
     def elaborate(self, platform):
         m = Module()
@@ -435,7 +435,10 @@ def sim_sincos(m):
     def proc():
         yield from tick(2)
 
-        n = Num(m.outwidth)
+        def fn(x):
+            mask = (1 << m.outwidth) - 1
+            mid = mask >> 1
+            return (mid + x) & mask
 
         for i in range(1 << m.inwidth):
             yield from tick(1)
@@ -456,12 +459,10 @@ def sim_sincos(m):
                 if r:
                     break
 
-            mask = (1 << m.outwidth) - 1
-            s = yield m.sin & mask
-            c = yield m.cos & mask
-            r = yield m.radians.radians & mask
-            s, c, r = int(s), int(c), int(r)
-            print(i, hex(c), hex(s), hex(r), n.s_to_f(r), n.s_to_f(s), n.s_to_f(c))
+            s = yield fn(m.sin)
+            c = yield fn(m.cos)
+            r = yield m.radians.radians
+            print("sincos", i, hex(c), hex(s), hex(r))
 
     sim.add_clock(1 / 50e6)
     sim.add_sync_process(proc)
@@ -474,11 +475,11 @@ def sim_sincos(m):
 if __name__ == "__main__":
 
     width = 12
-    #dut = Cordic(width=width)
-    #sim_cordic(dut)
+    dut = Cordic(width=width)
+    sim_cordic(dut)
 
-    #dut = ToRadians(inwidth=10, outwidth=16)
-    #sim_radians(dut)
+    dut = ToRadians(inwidth=10, outwidth=16)
+    sim_radians(dut)
 
     dut = SinCos(inwidth=8, outwidth=width)
     sim_sincos(dut)
