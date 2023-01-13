@@ -103,7 +103,6 @@ class Cordic(Elaboratable):
         self.iteration = Signal(bits_for(self.iterations))
         self.d = Signal()
 
-
     def make_rom(self):
         rom = []
         n = Num(self.width)
@@ -243,6 +242,7 @@ class SinCos(Elaboratable):
 
         # input data
         self.angle = Signal(inwidth)
+        self.offset = Signal(unsigned(outwidth))
 
         # output data
         self.sin = Signal(signed(outwidth))
@@ -286,27 +286,27 @@ class SinCos(Elaboratable):
 
         with m.If(self.cordic.ready):
 
-            # correct the output quadrant
+            # correct the output for each quadrant
 
             with m.If(quadrant == 0):
                 m.d.sync += [
-                    self.cos.eq(self.cordic.x),
-                    self.sin.eq(self.cordic.y),
+                    self.cos.eq(self.offset + self.cordic.x),
+                    self.sin.eq(self.offset + self.cordic.y),
                 ]
             with m.Elif(quadrant == 1):
                 m.d.sync += [
-                    self.cos.eq(-self.cordic.y),
-                    self.sin.eq(self.cordic.x),
+                    self.cos.eq(self.offset - self.cordic.y),
+                    self.sin.eq(self.offset + self.cordic.x),
                 ]
             with m.Elif(quadrant == 2):
                 m.d.sync += [
-                    self.cos.eq(-self.cordic.x),
-                    self.sin.eq(-self.cordic.y),
+                    self.cos.eq(self.offset - self.cordic.x),
+                    self.sin.eq(self.offset - self.cordic.y),
                 ]
             with m.Elif(quadrant == 3):
                 m.d.sync += [
-                    self.cos.eq(self.cordic.y),
-                    self.sin.eq(-self.cordic.x),
+                    self.cos.eq(self.offset + self.cordic.y),
+                    self.sin.eq(self.offset - self.cordic.x),
                 ]
 
         return m
@@ -437,8 +437,10 @@ def sim_sincos(m):
 
         def fn(x):
             mask = (1 << m.outwidth) - 1
-            mid = mask >> 1
-            return (mid + x) & mask
+            return x & mask
+
+        mid = (1 << (m.outwidth - 1)) - 1
+        yield m.offset.eq(mid)
 
         for i in range(1 << m.inwidth):
             yield from tick(1)
