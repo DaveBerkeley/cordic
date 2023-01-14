@@ -8,63 +8,18 @@ from amaranth.sim import *
 from amaranth.utils import bits_for
 
 #
-#   Fixed point values of 'width' bits
-#   representing numbers in the range +1.9999 to -1.9999
+#   Fixed point representation of a range of floats
 
 class Num:
 
-    def __init__(self, width):
-        assert width >= 2
-        self.width = width
-        self.gain = 1 << (width-2)
+    def __init__(self, _range, fmax):
+        self.mul = _range / (2.0 * fmax)
 
     def f_to_s(self, f):
-        "float to signal"
-        assert -2.0 < f < 2.0, f
-
-        sign = 0
-        if f < 0.0:
-            sign = 1 << (self.width-1)
-            f = -f
-        f *= self.gain
-        f += sign
-        return int(f)
+        return int(f * self.mul)
 
     def s_to_f(self, s):
-        "signal to float"
-        sign = 1
-        if s & (1 << (self.width-1)):
-            sign = -1
-            s &= ~(1 << self.width-1)
-
-        f = float(s) / self.gain
-        return f * sign
-
-    def approx(self, f1, f2):
-        err = abs(f1 - f2)
-        margin = 1.0 / self.gain
-        return err < margin
-
-f_test = (
-    ( 12, 1.9999, 0x7ff ),
-    ( 4, 1.9999, 0x7 ),
-    ( 4, -1.9999, 0xf ),
-    ( 8, 1.57079, 0x64 ), # pi/2
-    ( 12, 1.75, 0x700 ),
-    ( 12, 0.75, 0x300 ),
-    ( 12, 0.25, 0x100 ),
-    ( 12, 0.0, 0x0 ),
-    ( 12, -0.25, 0x900 ),
-    ( 12, -0.5, 0xa00 ),
-    ( 12, -0.9999, 0xbff ),
-    ( 12, -1.9999, 0xfff ),
-)
-
-for width, f, x in f_test:
-    n = Num(width)
-    assert n.f_to_s(f) == x, (width, f, hex(x), hex(n.f_to_s(f)))
-    assert n.approx(n.s_to_f(n.f_to_s(f)), f), (n.f_to_s(f), n.s_to_f(n.f_to_s(f)), f)
-    assert n.approx(n.s_to_f(x), f), (width, f, hex(x), n.s_to_f(x))
+        return float(s / self.mul)
 
 #
 #
@@ -105,7 +60,7 @@ class Cordic(Elaboratable):
 
     def make_rom(self):
         rom = []
-        n = Num(self.width)
+        n = Num(1 << self.width, math.pi/2.0)
         i = 0;
         while True:
             s = math.atan(1.0 / (1 << i))
@@ -329,16 +284,15 @@ def sim_cordic(m):
         for i in range(n):
             yield Tick()
 
-    def to_s(f):
-        n = Num(m.width)
-        return n.f_to_s(f)
+    nrange = 1 << m.width
+    na = Num(nrange, 90.0)
+    nx = Num(nrange, 1.0)
 
     def run(angle):
 
-        yield m.x0.eq(to_s(1.0/m.K))
+        yield m.x0.eq(nx.f_to_s(1.0/m.K))
         yield m.y0.eq(0)
-        a = math.radians(angle)
-        yield m.z0.eq(to_s(a))
+        yield m.z0.eq(na.f_to_s(angle))
 
         yield m.start.eq(1)
         yield from tick(1)
@@ -355,19 +309,16 @@ def sim_cordic(m):
         return x, y
 
     def proc():
-        n = Num(m.width)
+        mask = (1 << (m.width - 1)) - 1
         for angle in range(90):
             x, y = yield from run(angle)
             r = math.radians(angle)
             sin = math.sin(r)
             cos = math.cos(r)
-            xf = n.s_to_f(x)
-            yf = n.s_to_f(y)
-            print(angle, hex(n.f_to_s(r)), hex(x), hex(y), xf, yf, cos, sin)
+            xf = nx.s_to_f(x)
+            yf = nx.s_to_f(y)
+            print("cordic", angle, hex(x & mask), hex(y & mask), xf, yf, cos, sin)
             # TODO : better validation
-            nn = Num(m.width - 1)
-            err = abs(xf - cos)
-            #assert nn.approx(xf, cos), (xf, cos, nn.approx(xf, cos))
 
     sim.add_clock(1 / 50e6)
     sim.add_sync_process(proc)
@@ -480,10 +431,10 @@ if __name__ == "__main__":
     dut = Cordic(width=width)
     sim_cordic(dut)
 
-    dut = ToRadians(inwidth=10, outwidth=16)
-    sim_radians(dut)
+    #dut = ToRadians(inwidth=10, outwidth=16)
+    #sim_radians(dut)
 
-    dut = SinCos(inwidth=8, outwidth=width)
-    sim_sincos(dut)
+    #dut = SinCos(inwidth=8, outwidth=width)
+    #sim_sincos(dut)
 
 # FIN

@@ -1,4 +1,4 @@
-CORDIC Engine
+FPGA CORDIC Engine
 =============
 
 Implementation of 
