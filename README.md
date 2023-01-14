@@ -6,6 +6,8 @@ Implementation of
 in 
 [Amaranth](https://github.com/amaranth-lang/amaranth).
 
+**note :- work in progress. I've made some incorrect assumptions which I need to fix.**
+
 CORDIC (for "COordinate Rotation DIgital Computer") is a method of deriving sin() and cos() from an angle. It was first described by Jack E. Volder(1) in his 1959 paper "The CORDIC Trigonometric Computing Technique".
 
 It uses an iterative technique of successive approximation to generate sin and cos outputs. A binary search through different rotations is accumulated until the desired angle is acheived.
