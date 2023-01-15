@@ -15,43 +15,44 @@ class Cordic(Elaboratable):
     # Gain from the atan() approximation
     K = 1.646760258121
 
-    def __init__(self, width):
+    def __init__(self, a_width, o_width):
 
-        self.width = width
+        self.a_width = a_width
+        self.o_width = o_width
 
         # Initial state
-        self.x0 = Signal(signed(width))
-        self.y0 = Signal(signed(width))
-        self.z0 = Signal(signed(width))
+        self.x0 = Signal(signed(o_width))
+        self.y0 = Signal(signed(o_width))
+        self.z0 = Signal(signed(a_width))
 
         self.start = Signal()
         self.ready = Signal()
  
-        self.x = Signal(signed(width))
-        self.y = Signal(signed(width))
-        self.z = Signal(signed(width))
+        self.x = Signal(signed(o_width))
+        self.y = Signal(signed(o_width))
+        self.z = Signal(signed(a_width))
 
         # ROM for atan(pow(2,-i)) values
         self.rom = self.make_rom()
         self.iterations = len(self.rom)
         # ROM output for this iteration
-        self.a = Signal(signed(width))
+        self.a = Signal(signed(a_width))
 
         # bit-shifted versions
-        self.ys = Signal(signed(width))
-        self.xs = Signal(signed(width))
+        self.ys = Signal(signed(o_width))
+        self.xs = Signal(signed(o_width))
 
         self.iteration = Signal(bits_for(self.iterations))
         self.d = Signal()
 
     def make_rom(self):
         rom = []
-        scale = (1 << width) / math.pi
+        scale = (1 << self.a_width) / math.pi
         i = 0;
         while True:
             f = math.atan(1.0 / (1 << i))
             s = int(f * scale)
-            print("rom", s)
+            #print("rom", s)
             rom.append(Const(s))
             if s == 0:
                 break
@@ -63,7 +64,7 @@ class Cordic(Elaboratable):
 
         m.d.comb += [
             # sign of the z register
-            self.d.eq(self.z[self.width-1] == 0),
+            self.d.eq(self.z[self.a_width-1] == 0),
             # atan(pow(2, -i)) value for this iteration
             self.a.eq(self.rom[self.iteration]),
 
@@ -124,9 +125,9 @@ def sim_cordic(m):
         for i in range(n):
             yield Tick()
 
-    nrange = 1 << m.width
-    mask = nrange - 1
-    x0 = int(nrange / (m.K * 2))
+    a_range = 1 << m.a_width
+    o_range = 1 << m.o_width
+    x0 = int(0.99 * o_range / (m.K * 2))
 
     def run(angle, x0):
 
@@ -150,9 +151,16 @@ def sim_cordic(m):
 
     def proc():
 
-        for angle in range(-(nrange-1)//2, nrange//2):
+        def signed(x):
+            sign = 1 << (m.o_width - 1)
+            mask = sign - 1
+            if x & sign:
+                return (x & mask) - sign
+            return x & mask
+
+        for angle in range(-(a_range-1)//2, a_range//2):
             x, y = yield from run(angle, x0)
-            print("cordic", angle, hex(x & mask), hex(y & mask)) # , xf, yf) # , cos, sin)
+            print("cordic", angle, signed(x), signed(y))
             # TODO : better validation
 
     sim.add_clock(1 / 50e6)
@@ -165,8 +173,9 @@ def sim_cordic(m):
 
 if __name__ == "__main__":
 
-    width = 10
-    dut = Cordic(width=width)
+    a_width = 8
+    o_width = 12
+    dut = Cordic(a_width=a_width, o_width=o_width)
     sim_cordic(dut)
 
 # FIN
