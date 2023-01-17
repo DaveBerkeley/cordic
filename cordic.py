@@ -8,9 +8,11 @@ from amaranth.sim import *
 from amaranth.utils import bits_for
 
 #
+#   Core CORIDC Engine
 #
+#   handles signed binary representing -90 .. +90 degrees
 
-class Cordic(Elaboratable):
+class CordicCore(Elaboratable):
 
     # Gain from the atan() approximation
     K = 1.646760258121
@@ -27,7 +29,7 @@ class Cordic(Elaboratable):
 
         self.start = Signal()
         self.ready = Signal()
- 
+
         self.x = Signal(signed(o_width))
         self.y = Signal(signed(o_width))
         self.z = Signal(signed(a_width))
@@ -74,13 +76,10 @@ class Cordic(Elaboratable):
         ]
 
         with m.If(self.ready == 0):
-            m.d.sync += [
-                self.iteration.eq(self.iteration+1),
-            ]
+            m.d.sync += self.iteration.eq(self.iteration+1)
+
         with m.If(self.iteration == (self.iterations-1)):
-            m.d.sync += [
-                self.ready.eq(1),
-            ]
+            m.d.sync += self.ready.eq(1)
 
         with m.If(self.start):
             m.d.sync += [
@@ -115,6 +114,36 @@ class Cordic(Elaboratable):
         ]
 
 #
+#   Cordic handling all 4 quadrants
+
+class Cordic(Elaboratable):
+
+    def __init__(self, a_width, o_width):
+        self.core = CordicCore(a_width - 1, o_width)
+
+        # Input signals
+        self.x0 = Signal(signed(o_width))
+        self.y0 = Signal(signed(o_width))
+        self.z0 = Signal(signed(a_width))
+        self.offset = Signal(signed(o_width))
+
+        self.quadrant = Signal(2)
+
+    def elaborate(self, platform):
+        m = Module()
+
+        m.submodules += self.core
+
+        m.d.comb += [
+            # connect inputs to core
+            self.core.x0.eq(self.x0),
+            self.core.y0.eq(self.y0),
+            self.core.z0.eq(self.z0), # loses top bit
+        ]
+
+        return m
+
+#
 #
 
 def sim_cordic(m):
@@ -128,12 +157,13 @@ def sim_cordic(m):
     a_range = 1 << m.a_width
     o_range = 1 << m.o_width
     x0 = int(0.99 * o_range / (m.K * 2))
+    y0 = 0
 
-    def run(angle, x0):
+    def run(x0, y0, z0):
 
         yield m.x0.eq(x0)
-        yield m.y0.eq(0)
-        yield m.z0.eq(angle)
+        yield m.y0.eq(y0)
+        yield m.z0.eq(z0)
 
         yield m.start.eq(1)
         yield from tick(1)
@@ -158,10 +188,13 @@ def sim_cordic(m):
                 return (x & mask) - sign
             return x & mask
 
-        for angle in range(-(a_range-1)//2, a_range//2):
-            x, y = yield from run(angle, x0)
-            print("cordic", angle, signed(x), signed(y))
+        for z0 in range(-(a_range-1)//2, a_range//2):
+            x, y = yield from run(x0, y0, z0)
+            print("cordic", z0, signed(x), signed(y))
             # TODO : better validation
+
+            # ./cordic.py | grep cordic  > /tmp/a.csv
+            # echo -e "set key off\nplot '/tmp/a.csv' u 2:3, '' u 2:4" | gnuplot --persist
 
     sim.add_clock(1 / 50e6)
     sim.add_sync_process(proc)
@@ -173,9 +206,21 @@ def sim_cordic(m):
 
 if __name__ == "__main__":
 
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--prog", action="store_true")
+    parser.add_argument("--verbose", action="store_true")
+    args = parser.parse_args()
+
     a_width = 8
     o_width = 12
-    dut = Cordic(a_width=a_width, o_width=o_width)
+    dut = CordicCore(a_width=a_width, o_width=o_width)
     sim_cordic(dut)
+
+    from amaranth_boards.ulx3s import ULX3S_85F_Platform as Platform
+    platform = Platform()
+    
+    platform.build(dut, do_program=args.prog, verbose=args.verbose)
+    
 
 # FIN
