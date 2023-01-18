@@ -13,12 +13,13 @@ class DAC(Elaboratable):
 
     C_REF = 0x8
     C_CONVERT = 0x3
+    C_RESET = 0x7
 
     def __init__(self):
         # Outputs
         self.cs = Signal()
         self.copi = Signal()
-        self.sck = Signal()
+        self.sck = Signal(reset=1)
 
         self.data = Signal(12)
         self.addr = Signal(4)
@@ -38,9 +39,9 @@ class DAC(Elaboratable):
 
         # pad the 32-bit word with unused sections
         top = Const(0, 4)
-        tail = Const(0, 8)
+        tail = Const(1, 8)
 
-        m.d.sync += self.sck.eq(0)
+        m.d.sync += self.sck.eq(1)
 
         with m.If(self.ready):
             # end cs period
@@ -53,18 +54,15 @@ class DAC(Elaboratable):
                 self.ready.eq(0),
 
                 self.cs.eq(1),
-                self.sck.eq(0),
                 self.sr.eq(Cat(tail, self.data, self.addr, self.cmd, top)),
             ]
 
         with m.If(self.cs):
             # running
             with m.If(~self.ready):
-                m.d.sync += [
-                    self.sck.eq(self.cs & ~self.sck),
-                ]
+                m.d.sync += self.sck.eq(~self.sck)
 
-            with m.If(self.sck):
+            with m.If(~self.sck):
                 m.d.sync += [
                     self.sr.eq(self.sr << 1),
                     self.bit.eq(self.bit - 1),
@@ -72,10 +70,7 @@ class DAC(Elaboratable):
 
                 with m.If(self.bit == 0):
                     # done
-                    m.d.sync += [
-                        self.ready.eq(1),
-                        self.sck.eq(0),
-                    ]
+                    m.d.sync += self.ready.eq(1)
 
         return m
 
@@ -131,8 +126,8 @@ def sim(m):
             state['cs'] = cs
 
             if cs and (ck != state['ck']):
-                # leading edge of clock
-                if ck:
+                # -ve edge of clock
+                if not ck:
                     state['bit'] += 1
                     state['sr'].append(d)
             state['ck'] = ck
@@ -173,11 +168,11 @@ def sim(m):
         yield from tick()
 
         test = [
-            0x08a00100,
-            0x03112300,
-            0x032abc00,
-            0x034fff00,
-            0x03800000,
+            0x08a00101,
+            0x03112301,
+            0x032abc01,
+            0x034fff01,
+            0x03800001,
         ]
 
         for i, d in enumerate(test):
