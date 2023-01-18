@@ -25,7 +25,7 @@ class DAC(Elaboratable):
         self.cmd = Signal(4)
         self.start = Signal()
 
-        self.ready = Signal()
+        self.ready = Signal(reset=1)
 
         # SPI interface
         self.sr = Signal(32)
@@ -137,19 +137,22 @@ def sim(m):
                     state['sr'].append(d)
             state['ck'] = ck
 
+    def wait_ready():
+        while True:
+            yield from tick()
+            r = yield m.ready
+            if r:
+                break
+
     def tx(data, addr, cmd):
+        yield from wait_ready()
+        yield from tick()
         yield m.start.eq(1)
         yield m.data.eq(data)
         yield m.addr.eq(addr)
         yield m.cmd.eq(cmd)
         yield from tick()
         yield m.start.eq(0)
-
-        while True:
-            yield from tick()
-            r = yield m.ready
-            if r:
-                break
 
         yield from tick()
 
@@ -166,6 +169,8 @@ def sim(m):
 
         for cmd in cmds:
             yield from tx(*cmd)
+        yield from wait_ready()
+        yield from tick()
 
         test = [
             0x08a00100,
