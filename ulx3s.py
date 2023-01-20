@@ -7,7 +7,7 @@ from enum import IntEnum, unique
 from amaranth import *
 from amaranth.build import *
 
-from cordic import Cordic
+from cordic import CordicRotate
 
 from pll import get_pll
 from ad5628 import DAC
@@ -30,7 +30,7 @@ class Application(Elaboratable):
 
     def __init__(self):
         self.cwidth = 12
-        self.cordic = Cordic(a_width=self.cwidth, o_width=self.cwidth)
+        self.cordic = CordicRotate(a_width=self.cwidth, o_width=self.cwidth)
 
         self.dac = DAC()
 

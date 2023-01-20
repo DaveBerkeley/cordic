@@ -12,7 +12,7 @@ from amaranth.utils import bits_for
 #
 #   handles signed binary representing -90 .. +90 degrees
 
-class CordicCore(Elaboratable):
+class Cordic(Elaboratable):
 
     # Gain from the atan() approximation
     K = 1.646760258121
@@ -125,10 +125,10 @@ class CordicCore(Elaboratable):
 #
 #   Cordic handling all 4 quadrants
 
-class Cordic(Elaboratable):
+class CordicRotate(Elaboratable):
 
     def __init__(self, a_width, o_width):
-        self.core = CordicCore(a_width, o_width)
+        self.core = Cordic(a_width, o_width)
 
         self.X0 = int(0.99 * (1 << o_width) / (self.core.K * 2))        
 
@@ -153,6 +153,8 @@ class Cordic(Elaboratable):
         m = Module()
 
         m.submodules += self.core
+
+        m.d.comb += self.core.vector_mode.eq(0)
 
         m.d.sync += [
             self.core.start.eq(self.start),
@@ -193,6 +195,93 @@ class Cordic(Elaboratable):
             self.start,
             self.ready,
         ]
+
+#
+#
+
+class CordicVector(Elaboratable):
+
+    def __init__(self, a_width, o_width):
+        self.core = Cordic(a_width, o_width)
+
+        self.x0 = Signal(signed(o_width))
+        self.y0 = Signal(signed(o_width))
+        self.z0 = Signal(unsigned(a_width))
+
+        self.start = Signal()
+        self.ready = Signal()
+
+        self.quadrant = Signal(2)
+
+        self.x = Signal(signed(o_width))
+        self.y = Signal(signed(o_width))
+        self.z = Signal(signed(a_width))
+
+    def elaborate(self, platform):
+        m = Module()
+
+        m.submodules += self.core
+
+        m.d.comb += [
+            self.core.vector_mode.eq(1)
+        ]
+
+        m.d.sync += [
+            self.core.start.eq(self.start),
+            self.ready.eq(self.core.ready),
+        ]
+
+        sign_bit = self.core.a_width - 1
+
+        with m.If(self.start):
+            m.d.sync += [
+                # the Quadrant is determined by the sign of the x/y inputs
+                self.quadrant.eq(Cat(self.x0[sign_bit], self.y0[sign_bit])),
+                # latch the inputs
+                self.core.x0.eq(self.x0),
+                self.core.y0.eq(self.y0),
+                self.core.z0.eq(self.z0),
+            ]
+
+        z2 = self.core.z >> 1
+        hi = 1 << (self.core.a_width - 1)
+
+        with m.If(self.core.ready):
+
+            with m.If(self.quadrant == 0):
+                m.d.sync += [
+                    self.x.eq(self.core.x),
+                    self.y.eq(self.core.y),
+                    self.z.eq(z2),
+                ]
+            with m.If(self.quadrant == 1):
+                m.d.sync += [
+                    self.x.eq(self.core.x),
+                    self.y.eq(self.core.y),
+                    self.z.eq(z2 + hi),
+                ]
+            with m.If(self.quadrant == 2):
+                m.d.sync += [
+                    self.x.eq(self.core.x),
+                    self.y.eq(self.core.y),
+                    self.z.eq(z2),
+                ]
+            with m.If(self.quadrant == 3):
+                m.d.sync += [
+                    self.x.eq(self.core.x),
+                    self.y.eq(self.core.y),
+                    self.z.eq(z2 + hi),
+                ]
+
+        return m
+
+    def ports(self):
+        return [
+            self.x0, self.y0, self.z0,
+            self.start, self.ready,
+            self.x, self.y, self.z,
+        ]
+
 #
 #
 
@@ -277,7 +366,6 @@ def sim_cordic(m):
         yield m.y0.eq(y0)
         yield m.z0.eq(z0)
         yield m.offset.eq(offset)
-        yield m.vector_mode.eq(0)
 
         yield m.start.eq(1)
         yield from tick()
@@ -369,11 +457,72 @@ def sim_core_angle(m):
             print("vector", angle, x, y, z)
 
             # ./cordic.py | grep vector > /tmp/c.csv
-            # echo -e "set key off\nplot '/tmp/c.csv' u 2:3, '' u 2:4, '' u 2:5" | gnuplot --persist
+            # echo -e "set key off\nplot '/tmp/c.csv' u 2:5" | gnuplot --persist
 
     sim.add_clock(1 / 50e6)
     sim.add_sync_process(proc)
     with sim.write_vcd("cordic3.vcd", traces=m.ports()):
+        sim.run()
+
+#
+#   Convert sin/cos to angle
+
+def sim_angle(m):
+
+    sim = Simulator(m)
+
+    def tick(n=1):
+        assert n
+        for i in range(n):
+            yield Tick()
+
+    def wait_ready(state=True):
+        while True:
+            r = yield m.ready
+            if r == state:
+                break
+            yield from tick()
+
+    def run(x0, y0, z0):
+        yield from wait_ready()
+
+        yield m.x0.eq(x0)
+        yield m.y0.eq(y0)
+        yield m.z0.eq(z0)
+
+        yield m.start.eq(1)
+        yield from tick()
+        yield m.start.eq(0)
+
+        yield from wait_ready(False)
+        yield from wait_ready(True)
+        x = yield m.x
+        y = yield m.y
+        z = yield m.z
+        return x, y, z
+
+    def proc():
+
+        x0 = 0
+        y0 = 0
+        scale = 1 << (m.core.o_width - 2)
+        scale *= 0.8
+
+        for angle in range(-180, 180):
+            r = math.radians(angle)
+            f = scale
+            x0 = int(f * math.cos(r))
+            y0 = int(f * math.sin(r))
+            z0 = 0
+            x, y, z = yield from run(x0, y0, z0)
+            print("angle", angle, x0, y0, z0, x, y, z)
+
+            # ./cordic.py | grep angle > /tmp/d.csv
+            # echo -e "set key off\nplot '/tmp/d.csv' u 2:3, '' u 2:4, '' u 2:8" | gnuplot --persist
+
+    sim.add_clock(1 / 50e6)
+    sim.add_sync_process(proc)
+    with sim.write_vcd("cordic4.vcd", traces=m.ports()):
         sim.run()
 
 #
@@ -383,11 +532,14 @@ if __name__ == "__main__":
 
     a_width = 12
     o_width = 12
-    dut = CordicCore(a_width=a_width, o_width=o_width)
-    #sim_core(dut)
-    sim_core_angle(dut)
-
     #dut = Cordic(a_width=a_width, o_width=o_width)
+    #sim_core(dut)
+    #sim_core_angle(dut)
+
+    #dut = CordicRotate(a_width=a_width, o_width=o_width)
     #sim_cordic(dut)
+
+    dut = CordicVector(a_width=a_width, o_width=o_width)
+    sim_angle(dut)
 
 # FIN
