@@ -25,10 +25,10 @@ class CordicCore(Elaboratable):
         # Initial state
         self.x0 = Signal(signed(o_width))
         self.y0 = Signal(signed(o_width))
-        self.z0 = Signal(signed(a_width))
+        self.z0 = Signal(unsigned(a_width))
 
         self.start = Signal()
-        self.ready = Signal()
+        self.ready = Signal(reset=1)
 
         self.x = Signal(signed(o_width))
         self.y = Signal(signed(o_width))
@@ -119,13 +119,24 @@ class CordicCore(Elaboratable):
 class Cordic(Elaboratable):
 
     def __init__(self, a_width, o_width):
-        self.core = CordicCore(a_width - 1, o_width)
+        self.core = CordicCore(a_width, o_width)
+
+        self.X0 = int(0.99 * (1 << o_width) / (self.core.K * 2))        
 
         # Input signals
         self.x0 = Signal(signed(o_width))
         self.y0 = Signal(signed(o_width))
-        self.z0 = Signal(signed(a_width))
+        self.z0 = Signal(unsigned(a_width))
         self.offset = Signal(signed(o_width))
+
+        self.start = Signal()
+
+        # Output Signals
+        self.x = Signal(signed(o_width))
+        self.y = Signal(signed(o_width))
+        self.z = Signal(signed(a_width))
+
+        self.ready = Signal()
 
         self.quadrant = Signal(2)
 
@@ -134,19 +145,49 @@ class Cordic(Elaboratable):
 
         m.submodules += self.core
 
-        m.d.comb += [
-            # connect inputs to core
-            self.core.x0.eq(self.x0),
-            self.core.y0.eq(self.y0),
-            self.core.z0.eq(self.z0), # loses top bit
+        m.d.sync += [
+            self.core.start.eq(self.start),
+            self.ready.eq(self.core.ready),
         ]
+
+        quad = self.z0 >> (self.core.a_width - 2) # top 2 bits of z0
+
+        with m.If(self.start):
+            m.d.sync += [
+                self.quadrant.eq(quad),
+                self.core.x0.eq(self.x0),
+                self.core.y0.eq(self.y0),
+                self.core.z0.eq(self.z0 << 1),
+            ]
+
+        with m.If(self.core.ready):
+            # latch the outputs according to the quadrant
+            with m.If((self.quadrant == 0) | (self.quadrant == 3)):
+                m.d.sync += [
+                    self.x.eq(self.offset + self.core.x),
+                    self.y.eq(self.offset + self.core.y),
+                    self.z.eq(self.core.z),
+                ]
+            with m.If((self.quadrant == 1) | (self.quadrant == 2)): 
+                m.d.sync += [
+                    self.x.eq(self.offset - self.core.x),
+                    self.y.eq(self.offset - self.core.y),
+                    self.z.eq(self.core.z),
+                ]
 
         return m
 
+    def ports(self):
+        return [
+            self.x0, self.y0, self.z0, 
+            self.x, self.y, self.z, 
+            self.start,
+            self.ready,
+        ]
 #
 #
 
-def sim_cordic(m):
+def sim_core(m):
     sim = Simulator(m)
 
     def tick(n=1):
@@ -204,23 +245,75 @@ def sim_cordic(m):
 #
 #
 
+def sim_cordic(m):
+    sim = Simulator(m)
+
+    def tick(n=1):
+        assert n
+        for i in range(n):
+            yield Tick()
+
+    def wait_ready(state=True):
+        while True:
+            r = yield m.ready
+            if r == state:
+                break
+            yield from tick()
+
+    def run(x0, y0, z0, offset):
+        yield from wait_ready()
+
+        yield m.x0.eq(x0)
+        yield m.y0.eq(y0)
+        yield m.z0.eq(z0)
+        yield m.offset.eq(offset)
+        yield m.start.eq(1)
+        yield from tick()
+        yield m.start.eq(0)
+
+        yield from wait_ready(False)
+        yield from wait_ready(True)
+        x = yield m.x
+        y = yield m.y
+        z = yield m.z
+        return x, y, z
+
+    def proc():
+        yield from tick(2)
+
+        mask = (1 << m.core.a_width) - 1
+
+        x0 = m.X0
+        offset = (1 << m.core.o_width) >> 1
+
+        for a in range(0, 1 << m.core.a_width, 1):
+            x, y, z = yield from run(x0, 0, a, offset)
+            z0 = yield m.core.z0
+            def fn(v):
+                return hex(mask & v)
+            print("quad", fn(a), fn(x), fn(y), fn(z), z0)
+
+            # ./cordic.py | grep quad > /tmp/b.csv
+            # echo -e "set key off\nplot '/tmp/b.csv' u 2:3, '' u 2:4" | gnuplot --persist
+
+        yield from tick()
+
+    sim.add_clock(1 / 50e6)
+    sim.add_sync_process(proc)
+    with sim.write_vcd("cordic2.vcd", traces=m.ports()):
+        sim.run()
+
+#
+#
+
 if __name__ == "__main__":
 
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--prog", action="store_true")
-    parser.add_argument("--verbose", action="store_true")
-    args = parser.parse_args()
-
-    a_width = 8
+    a_width = 12
     o_width = 12
     dut = CordicCore(a_width=a_width, o_width=o_width)
-    sim_cordic(dut)
+    sim_core(dut)
 
-    from amaranth_boards.ulx3s import ULX3S_85F_Platform as Platform
-    platform = Platform()
-    
-    platform.build(dut, do_program=args.prog, verbose=args.verbose)
-    
+    dut = Cordic(a_width=a_width, o_width=o_width)
+    sim_cordic(dut)
 
 # FIN
