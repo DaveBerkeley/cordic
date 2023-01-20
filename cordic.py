@@ -30,6 +30,8 @@ class CordicCore(Elaboratable):
         self.start = Signal()
         self.ready = Signal(reset=1)
 
+        self.vector_mode = Signal()
+
         self.x = Signal(signed(o_width))
         self.y = Signal(signed(o_width))
         self.z = Signal(signed(a_width))
@@ -64,9 +66,16 @@ class CordicCore(Elaboratable):
     def elaborate(self, platform):
         m = Module()
 
-        m.d.comb += [
+        sign_bit = self.a_width-1
+
+        with m.If(self.vector_mode):
+            # d = -sign(x * y)
+            m.d.comb += self.d.eq(self.x[sign_bit] ^ self.y[sign_bit])
+        with m.Else():
             # sign of the z register
-            self.d.eq(self.z[self.a_width-1] == 0),
+            m.d.comb += self.d.eq(self.z[sign_bit] == 0)
+
+        m.d.comb += [
             # atan(pow(2, -i)) value for this iteration
             self.a.eq(self.rom[self.iteration]),
 
@@ -205,6 +214,7 @@ def sim_core(m):
         yield m.x0.eq(x0)
         yield m.y0.eq(y0)
         yield m.z0.eq(z0)
+        yield m.vector_mode.eq(0)
 
         yield m.start.eq(1)
         yield from tick(1)
@@ -267,6 +277,8 @@ def sim_cordic(m):
         yield m.y0.eq(y0)
         yield m.z0.eq(z0)
         yield m.offset.eq(offset)
+        yield m.vector_mode.eq(0)
+
         yield m.start.eq(1)
         yield from tick()
         yield m.start.eq(0)
@@ -304,6 +316,67 @@ def sim_cordic(m):
         sim.run()
 
 #
+#   Convert sin/cos to angle
+
+def sim_core_angle(m):
+
+    sim = Simulator(m)
+
+    def tick(n=1):
+        assert n
+        for i in range(n):
+            yield Tick()
+
+    def wait_ready(state=True):
+        while True:
+            r = yield m.ready
+            if r == state:
+                break
+            yield from tick()
+
+    def run(x0, y0, z0):
+        yield from wait_ready()
+
+        yield m.x0.eq(x0)
+        yield m.y0.eq(y0)
+        yield m.z0.eq(z0)
+        yield m.vector_mode.eq(1)
+
+        yield m.start.eq(1)
+        yield from tick()
+        yield m.start.eq(0)
+
+        yield from wait_ready(False)
+        yield from wait_ready(True)
+        x = yield m.x
+        y = yield m.y
+        z = yield m.z
+        return x, y, z
+
+    def proc():
+
+        x0 = 0
+        y0 = 0
+        scale = 1 << (m.o_width - 2)
+
+        for angle in range(-90, 90):
+            r = math.radians(angle)
+            f = scale
+            x0 = int(f * math.cos(r))
+            y0 = int(f * math.sin(r))
+            z0 = 0
+            x, y, z = yield from run(x0, y0, z0)
+            print("vector", angle, x, y, z)
+
+            # ./cordic.py | grep vector > /tmp/c.csv
+            # echo -e "set key off\nplot '/tmp/c.csv' u 2:3, '' u 2:4, '' u 2:5" | gnuplot --persist
+
+    sim.add_clock(1 / 50e6)
+    sim.add_sync_process(proc)
+    with sim.write_vcd("cordic3.vcd", traces=m.ports()):
+        sim.run()
+
+#
 #
 
 if __name__ == "__main__":
@@ -311,9 +384,10 @@ if __name__ == "__main__":
     a_width = 12
     o_width = 12
     dut = CordicCore(a_width=a_width, o_width=o_width)
-    sim_core(dut)
+    #sim_core(dut)
+    sim_core_angle(dut)
 
-    dut = Cordic(a_width=a_width, o_width=o_width)
-    sim_cordic(dut)
+    #dut = Cordic(a_width=a_width, o_width=o_width)
+    #sim_cordic(dut)
 
 # FIN
