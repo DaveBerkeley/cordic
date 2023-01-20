@@ -2,10 +2,12 @@
 
 import argparse
 
+from enum import IntEnum, unique
+
 from amaranth import *
 from amaranth.build import *
 
-from cordic import CordicCore
+from cordic import Cordic
 
 from pll import get_pll
 from ad5628 import DAC
@@ -18,94 +20,131 @@ from amaranth_boards.ulx3s import ULX3S_85F_Platform as Platform
 #
 #
 
+class State(IntEnum):
+
+    IDLE = 0
+    CORDIC = 1
+    DAC = 2
+
 class Application(Elaboratable):
 
     def __init__(self):
-        self.counter = Signal(32)
-
-        self.cwidth = 8
-        self.cordic = CordicCore(a_width=self.cwidth, o_width=self.cwidth)
+        self.cwidth = 12
+        self.cordic = Cordic(a_width=self.cwidth, o_width=self.cwidth)
 
         self.dac = DAC()
+
+        self.clock_speed = 100e6
+        self.samples = 32
+        self.us = 40e3
+        self.period = int(self.clock_speed / (self.us * self.samples))
+        self.sample_period = Signal(range(self.period))
+        self.phase = Signal(self.cwidth)
+
+        self.state = Signal(State, reset=State.IDLE)
 
     def elaborate(self, platform):
         m = Module()
 
-        self.add_spi_dac(m, platform)
         m.submodules += self.dac
+        m.submodules += self.cordic
 
-        self.set_clock(m, platform, 10e6)
+        self.add_spi_dac(m, platform)
 
-        m.d.sync += [
-            self.counter.eq(self.counter + 1),
-        ]
-
-        output = Signal(8)
-
-        with m.If(self.cordic.ready):
-            m.d.sync += output.eq(self.cordic.z)
+        self.set_clock(m, platform, self.clock_speed)
 
         for i in range(8):
             s = platform.request("led", i)
-            m.d.sync += [
-                #s.eq(self.counter[i + 20]),
-                s.eq(output[i] + 0x7f),
-            ]
+            try:
+                m.d.sync += s.eq(self.sample_period[i])
+            except IndexError:
+                break
 
-        m.submodules += self.cordic
-
-        x0 = int(0.99 * self.cwidth / (self.cordic.K * 2))
-
-        m.d.comb += [
-            self.cordic.x0.eq(x0),
-            self.cordic.y0.eq(0),
+        m.d.sync += [
+            self.sample_period.eq(self.sample_period + 1),
         ]
 
-        shift = 21
-        shifted = Signal(self.cwidth+1)
+        with m.If(self.sample_period == (self.period - 1)):
+            m.d.sync += self.sample_period.eq(0)
 
-        m.d.comb += shifted.eq(self.counter >> shift)
+        x0 = self.cordic.X0
+        offset = (1 << self.cwidth) >> 1
+        step = 1 << 7
 
-        for i in range(self.cwidth):
-            m.d.comb += [
-                self.cordic.z0[i].eq(shifted[i+1]),
+        with m.If(self.sample_period == 0):
+
+            # start sine generation
+            m.d.sync += [
+                self.cordic.x0.eq(x0),
+                self.cordic.y0.eq(0),
+                self.cordic.z0.eq(self.phase),
+                self.cordic.offset.eq(offset),
+                self.cordic.start.eq(1),
+                self.phase.eq(self.phase + step),
             ]
 
-        start = Signal(4)
-        m.d.comb += start.eq(shifted[0])
-        m.d.sync += self.cordic.start.eq(start)
+        with m.If(self.cordic.start):
+            m.d.sync += [
+                self.cordic.start.eq(0),
+                self.state.eq(State.CORDIC),
+            ]
 
         # SPI DAC
 
-        dac_state = Signal(2)
+        dac_init = Signal(reset=1)
 
-        with m.If(self.dac.ready & ~self.dac.start):
+        with m.If(self.cordic.ready & self.dac.ready & (self.state == State.CORDIC)):
             # Tx command
             m.d.sync += self.dac.start.eq(1)
 
-            with m.If(dac_state == 0):
-                m.d.sync += [
-                    self.dac.cmd.eq(self.dac.C_RESET),
-                    self.dac.addr.eq(0),
-                    self.dac.data.eq(0),
-                    dac_state.eq(1),
-                ]
-
-            with m.If(dac_state == 1):
+            with m.If(dac_init):
                 m.d.sync += [
                     self.dac.cmd.eq(self.dac.C_REF),
                     self.dac.addr.eq(0),
-                    self.dac.data.eq(1),
-                    dac_state.eq(2),
+                    self.dac.data.eq(0),
+                    dac_init.eq(0),
+                ]
+
+            with m.Else():
+                m.d.sync += [
+                    self.dac.cmd.eq(self.dac.C_CONVERT),
+                    self.dac.addr.eq(0),
+                    self.dac.data.eq(self.cordic.x),
                 ]
 
         with m.If(self.dac.start):
             m.d.sync += [
                 self.dac.start.eq(0),
-                self.dac.cmd.eq(self.dac.C_CONVERT),
-                # TODO : send real data
-                self.dac.data.eq(self.dac.data + 1),
+                self.state.eq(State.DAC),
             ]
+
+        with m.If((self.state == State.DAC) & self.dac.ready):
+            m.d.sync += self.state.eq(State.IDLE)
+
+        # Test outputs to logic analyser
+
+        r = [
+            # Use connector ("gpio",0) to define PMOD SPI DAC Peripheral
+            Resource("test", 0, Pins("gpio_0:3+", dir="o"), Attrs(IO_TYPE="LVCMOS33")),
+            Resource("test", 1, Pins("gpio_0:2+", dir="o"), Attrs(IO_TYPE="LVCMOS33")),
+            Resource("test", 2, Pins("gpio_0:0+", dir="o"), Attrs(IO_TYPE="LVCMOS33")),
+            Resource("test", 3, Pins("gpio_0:1+", dir="o"), Attrs(IO_TYPE="LVCMOS33")),
+        ]
+
+        platform.add_resources(r)
+
+        m.d.comb += [
+            platform.request("test", 0).eq(self.sample_period == 0),
+            platform.request("test", 1).eq(self.cordic.start),
+            platform.request("test", 2).eq(self.cordic.ready),
+            platform.request("test", 3).eq(self.dac.ready),
+
+            #platform.request("test", 0).eq(self.cordic.start),
+            #platform.request("test", 0).eq(self.cordic.x[0]),
+            #platform.request("test", 1).eq(self.cordic.x[1]),
+            #platform.request("test", 2).eq(self.cordic.x[2]),
+            #platform.request("test", 3).eq(self.cordic.x[3]),
+        ]
 
         return m
 

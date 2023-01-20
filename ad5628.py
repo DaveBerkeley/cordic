@@ -38,8 +38,8 @@ class DAC(Elaboratable):
         m.d.comb += self.copi.eq(self.sr[31])
 
         # pad the 32-bit word with unused sections
-        top = Const(0, 4)
-        tail = Const(1, 8)
+        top = Const(0xf, 4)
+        tail = Const(0xff, 8)
 
         m.d.sync += self.sck.eq(1)
 
@@ -168,11 +168,11 @@ def sim(m):
         yield from tick()
 
         test = [
-            0x08a00101,
-            0x03112301,
-            0x032abc01,
-            0x034fff01,
-            0x03800001,
+            0xf8a001ff,
+            0xf31123ff,
+            0xf32abcff,
+            0xf34fffff,
+            0xf38000ff,
         ]
 
         for i, d in enumerate(test):
