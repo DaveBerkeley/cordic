@@ -18,8 +18,6 @@ The initial x0, y0 and z0 values are loaded in. x0 and y0 are the initial sin & 
 
 The table of incremental rotations are shown here as **α**n. These are stored as an Array of constants, indexed by the iteration number. The number of iterations is determined by the **α** table. When the value becomes 0, no further adjustment is possible, so you can stop iterating. The number of iterations is therefore determined by the bit-width, which can be specified.
 
-Two different signed fixed point represtations are used. The Z loop uses radians from 0 to pi/2 so has a range of +1.99 to -1.99. The X and Y loops have a range of +0.999 to -0.999.
-
 The algorithm has a gain of K, so if x0 is loaded with 1.0/K and y0 with 0.0, the output will be scaled to unity gain.
 
 The unit can calculate sin/cos in the first and fourth quadrants (-90 .. +90 degrees).
