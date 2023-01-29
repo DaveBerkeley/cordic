@@ -8,11 +8,13 @@ in
 
 CORDIC (for "COordinate Rotation DIgital Computer") is a method of deriving sin() and cos() from an angle. It was first described by Jack E. Volder(1) in his 1959 paper "The CORDIC Trigonometric Computing Technique".
 
+![two quadrants](cordic_10_bit.png)
+
 It uses an iterative technique of successive approximation to generate sin and cos outputs. A binary search through different rotations is accumulated until the desired angle is acheived.
 
 The core of the engine is described by the following block diagram :
 
-![hello](CORDIC.png)
+![cordic system diagram](CORDIC.png)
 
 The initial x0, y0 and z0 values are loaded in. x0 and y0 are the initial sin & cos values. z0 is the desired phase angle in radians. The engine is clocked for a number of iterations, the x and y outputs are the cos and sin of the desired angle.
 
