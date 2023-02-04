@@ -8,7 +8,7 @@ from amaranth.sim import *
 
 class SPI(Elaboratable):
 
-    def __init__(self, width):
+    def __init__(self, width, divider=1):
         self.width = width
         # Outputs
         self.cs = Signal()
@@ -22,15 +22,22 @@ class SPI(Elaboratable):
         self.data = Signal(width)
 
         # SPI interface
-        self.sr = Signal(width)
+        self.sro = Signal(width)
         self.bit = Signal(range(width))
+
+        self.divider = divider
+        self.ck_gen = Signal(range(divider))
+        self.ck_change = Signal()
 
     def elaborate(self, platform):
         m = Module()
 
-        m.d.comb += self.copi.eq(self.sr[self.width-1])
+        m.d.comb += self.copi.eq(self.sro[self.width-1])
 
-        m.d.sync += self.sck.eq(1)
+        if self.divider > 1:
+            m.d.sync += self.ck_gen.eq(self.ck_gen + 1)
+
+        m.d.comb += self.ck_change.eq(self.ck_gen == 0)
 
         with m.If(self.ready):
             # end cs period
@@ -43,17 +50,17 @@ class SPI(Elaboratable):
                 self.ready.eq(0),
 
                 self.cs.eq(1),
-                self.sr.eq(self.data),
+                self.sro.eq(self.data),
             ]
 
-        with m.If(self.cs):
+        with m.If(self.cs & self.ck_change):
             # running
             with m.If(~self.ready):
                 m.d.sync += self.sck.eq(~self.sck)
 
             with m.If(~self.sck):
                 m.d.sync += [
-                    self.sr.eq(self.sr << 1),
+                    self.sro.eq(self.sro << 1),
                     self.bit.eq(self.bit - 1),
                 ]
 
@@ -73,22 +80,118 @@ class SPI(Elaboratable):
 #
 #
 
+class SpiInit(Elaboratable):
+
+    def __init__(self, width=16, init=[], divider=1):
+        self.spi = SPI(width=width, divider=divider)
+
+        self.cs = Signal()
+        self.sck = Signal()
+        self.copi = Signal()
+        self.ready = Signal()
+        self.start = Signal()
+        self.data = Signal(width)
+
+        self.init = Array([ Const(x) for x in init ])
+
+        self.do_init = Signal(reset=1)
+        self.init_idx = Signal(range(len(self.init)+1))
+        self.init_start = Signal()
+
+    def elaborate(self, platform):
+        m = Module()
+
+        m.submodules += self.spi
+
+        # connect the SPI signals
+        m.d.comb += [
+            self.cs.eq(self.spi.cs),
+            self.sck.eq(self.spi.sck),
+            self.copi.eq(self.spi.copi),
+        ]
+
+        # connect start/ready/data depnding on init state
+        with m.If(self.do_init):
+            m.d.comb += [
+                self.spi.start.eq(self.init_start),
+                self.spi.data.eq(self.init[self.init_idx]),
+                self.ready.eq(0),
+            ]
+        with m.Else():
+            m.d.comb += [
+                self.spi.start.eq(self.start),
+                self.spi.data.eq(self.data),
+                self.ready.eq(self.spi.ready),
+            ]
+
+        # send init commands to device
+        with m.If(self.do_init):
+            with m.If(self.init_start):
+                m.d.sync += [
+                    self.init_start.eq(0),
+                    self.init_idx.eq(self.init_idx + 1),
+                ]
+
+            with m.If(self.spi.ck_change & self.spi.ready & ~self.spi.start):
+                m.d.sync += self.init_start.eq(1)
+
+            with m.If(self.init_idx == len(self.init)):
+                m.d.sync += self.do_init.eq(0)
+
+        return m
+
+    def ports(self):
+        return self.spi.ports()
+
+#
+#   Class used by simulation to read spi serial data
+
+class IO:
+
+    def __init__(self, width):
+        self.width = width
+        self.ck = 0
+        self.sr = []
+        self.bit = 0
+        self.cs = 0
+        self.rx = []
+
+    def reset(self):
+        # start of word
+        self.ck = 0
+        self.sr = []
+        self.bit = 0
+
+    def poll(self, cs, ck, d):
+        if cs != self.cs:
+            if cs:
+                # start of word
+                self.reset()
+            else:
+                # end of word
+                data = 0
+                for i in range(self.width):
+                    data <<= 1
+                    if self.sr[i]:
+                        data |= 1
+                self.rx.append(data)
+                self.reset()
+        self.cs = cs
+
+        if cs and (ck != self.ck):
+            # -ve edge of clock
+            if not ck:
+                self.bit += 1
+                self.sr.append(d)
+        self.ck = ck
+
+#
+#
+
 def sim(m):
     sim = Simulator(m)
 
-    state = {
-        'ck' : 0,
-        'cs' : 0,
-        'sr' : [],
-        'bit' : 0,
-        'rx' : [],
-    }
-
-    def reset():
-        # start of word
-        state['bit'] = 0
-        state['sr'] = []
-        state['ck'] = 0
+    do = IO(m.width)
 
     def tick(n=1):
         assert n
@@ -99,27 +202,7 @@ def sim(m):
             cs = yield m.cs
             ck = yield m.sck
             d = yield m.copi
-            if cs != state['cs']:
-                if cs:
-                    # start of word
-                    reset()
-                else:
-                    # end of word
-                    data = 0
-                    for i in range(32):
-                        data <<= 1
-                        if state['sr'][i]:
-                            data |= 1
-                    state['rx'].append(data)
-                    reset()
-            state['cs'] = cs
-
-            if cs and (ck != state['ck']):
-                # -ve edge of clock
-                if not ck:
-                    state['bit'] += 1
-                    state['sr'].append(d)
-            state['ck'] = ck
+            do.poll(cs, ck, d)
 
     def wait_ready():
         while True:
@@ -158,16 +241,9 @@ def sim(m):
         yield from wait_ready()
         yield from tick()
 
-        test = [
-            0xf8a001ff,
-            0xf31123ff,
-            0xf32abcff,
-            0xf34fffff,
-            0xf38000ff,
-        ]
-
-        for i, d in enumerate(test):
-            assert state['rx'][i] == d, (i, state, hex(state['rx'][i]), hex(d))
+        for i, d in enumerate(cmds):
+            # check we output the correct data
+            assert do.rx[i] == d, (i, state, hex(do.rx[i]), hex(d))
 
         yield from tick(5)
 
@@ -183,4 +259,4 @@ if __name__ == "__main__":
     dut = SPI(width=32)
     sim(dut)
 
-# FIN#   FIN
+#   FIN

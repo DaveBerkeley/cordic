@@ -3,7 +3,7 @@
 from amaranth import *
 from amaranth.sim import *
 
-from spi import SPI
+from spi import SpiInit, IO
 
 #
 #   Driver for SPI 12-bit 8-channel DAC
@@ -17,9 +17,9 @@ class DAC(Elaboratable):
     C_CONVERT = 0x3
     C_RESET = 0x7
 
-    def __init__(self):
+    def __init__(self, init, divider):
 
-        self.spi = SPI(width=32)
+        self.spi = SpiInit(width=32, init=init, divider=divider)
 
         # Outputs
         self.cs = Signal()
@@ -65,22 +65,10 @@ class DAC(Elaboratable):
 #
 #
 
-def sim(m):
+def sim(m, init, divider):
     sim = Simulator(m)
 
-    state = {
-        'ck' : 0,
-        'cs' : 0,
-        'sr' : [],
-        'bit' : 0,
-        'rx' : [],
-    }
-
-    def reset():
-        # start of word
-        state['bit'] = 0
-        state['sr'] = []
-        state['ck'] = 0
+    io = IO(32)
 
     def tick(n=1):
         assert n
@@ -91,27 +79,7 @@ def sim(m):
             cs = yield m.cs
             ck = yield m.sck
             d = yield m.copi
-            if cs != state['cs']:
-                if cs:
-                    # start of word
-                    reset()
-                else:
-                    # end of word
-                    data = 0
-                    for i in range(32):
-                        data <<= 1
-                        if state['sr'][i]:
-                            data |= 1
-                    state['rx'].append(data)
-                    reset()
-            state['cs'] = cs
-
-            if cs and (ck != state['ck']):
-                # -ve edge of clock
-                if not ck:
-                    state['bit'] += 1
-                    state['sr'].append(d)
-            state['ck'] = ck
+            io.poll(cs, ck, d)
 
     def wait_ready():
         while True:
@@ -122,7 +90,7 @@ def sim(m):
 
     def tx(data, addr, cmd):
         yield from wait_ready()
-        yield from tick()
+        yield from tick(divider)
         yield m.start.eq(1)
         yield m.data.eq(data)
         yield m.addr.eq(addr)
@@ -130,10 +98,8 @@ def sim(m):
         yield from tick()
         yield m.start.eq(0)
 
-        yield from tick()
-
     def proc():
-        yield from tick(5)
+        yield from tick(25)
 
         cmds = [
             (0x1,   0xa, DAC.C_REF),
@@ -156,8 +122,8 @@ def sim(m):
             0xf38000ff,
         ]
 
-        for i, d in enumerate(test):
-            assert state['rx'][i] == d, (i, state, hex(state['rx'][i]), hex(d))
+        for i, d in enumerate(init + test):
+            assert io.rx[i] == d, (i, hex(io.rx[i]), hex(d))
 
         yield from tick(5)
 
@@ -170,7 +136,10 @@ def sim(m):
 #
 
 if __name__ == "__main__":
-    dut = DAC()
-    sim(dut)
-
+    init = [
+        0x12345678,
+    ]
+    divider = 16
+    dut = DAC(init, divider)
+    sim(dut, init, divider)
 # FIN
