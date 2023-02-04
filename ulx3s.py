@@ -67,7 +67,8 @@ class Application(Elaboratable):
         with m.If(self.sample_period == (self.period - 1)):
             m.d.sync += self.sample_period.eq(0)
 
-        x0 = self.cordic.X0
+        #x0 = int(self.cordic.X0 * 0.25)
+        x0 = int(self.cordic.X0 * 1.0)
         offset = (1 << self.cwidth) >> 1
         step = 1 << 7
 

@@ -3,62 +3,70 @@
 from amaranth import *
 from amaranth.sim import *
 
-from spi import SPI
-
 #
-#   Driver for SPI 12-bit 8-channel DAC
-#
-#   https://digilent.com/reference/_media/pmod:pmod:pmodDA4_RM.pdf
 #
 
-class DAC(Elaboratable):
+class SPI(Elaboratable):
 
-    C_REF = 0x8
-    C_CONVERT = 0x3
-    C_RESET = 0x7
-
-    def __init__(self):
-
-        self.spi = SPI(width=32)
-
+    def __init__(self, width):
+        self.width = width
         # Outputs
         self.cs = Signal()
         self.copi = Signal()
         self.sck = Signal(reset=1)
 
-        self.data = Signal(12)
-        self.addr = Signal(4)
-        self.cmd = Signal(4)
-
         self.start = Signal()
         self.ready = Signal(reset=1)
+
+        # Data in
+        self.data = Signal(width)
+
+        # SPI interface
+        self.sr = Signal(width)
+        self.bit = Signal(range(width))
 
     def elaborate(self, platform):
         m = Module()
 
-        m.submodules += self.spi
+        m.d.comb += self.copi.eq(self.sr[self.width-1])
 
-        # pad the 32-bit word with unused sections
-        top = Const(0xf, 4)
-        tail = Const(0xff, 8)
+        m.d.sync += self.sck.eq(1)
 
-        # connect to the SPI submodule
-        m.d.comb += [
-            self.sck.eq(self.spi.sck),
-            self.cs.eq(self.spi.cs),
-            self.copi.eq(self.spi.copi),
+        with m.If(self.ready):
+            # end cs period
+            m.d.sync += self.cs.eq(0)
 
-            self.spi.start.eq(self.start),
-            self.ready.eq(self.spi.ready),
-            self.spi.data.eq(Cat(tail, self.data, self.addr, self.cmd, top)),
-        ]
+        with m.If(self.start):
+            # begin transfer
+            m.d.sync += [
+                self.bit.eq(self.width-1),
+                self.ready.eq(0),
+
+                self.cs.eq(1),
+                self.sr.eq(self.data),
+            ]
+
+        with m.If(self.cs):
+            # running
+            with m.If(~self.ready):
+                m.d.sync += self.sck.eq(~self.sck)
+
+            with m.If(~self.sck):
+                m.d.sync += [
+                    self.sr.eq(self.sr << 1),
+                    self.bit.eq(self.bit - 1),
+                ]
+
+                with m.If(self.bit == 0):
+                    # done
+                    m.d.sync += self.ready.eq(1)
 
         return m
 
     def ports(self):
         return [
-            self.cs, self.copi, self.sck,
-            self.data, self.addr, self.cmd,
+            self.data,
+            self.copi, self.cs, self.sck,
             self.start, self.ready,
         ]
 
@@ -120,13 +128,11 @@ def sim(m):
             if r:
                 break
 
-    def tx(data, addr, cmd):
+    def tx(data):
         yield from wait_ready()
         yield from tick()
         yield m.start.eq(1)
         yield m.data.eq(data)
-        yield m.addr.eq(addr)
-        yield m.cmd.eq(cmd)
         yield from tick()
         yield m.start.eq(0)
 
@@ -135,16 +141,20 @@ def sim(m):
     def proc():
         yield from tick(5)
 
+        def cat(data, addr, cmd):
+            return 0xf000_0000 + (cmd << 24) + (addr << 20) + (data << 8) + 0xff
+
+        C_REF, C_CONVERT = 0x8, 0x3
         cmds = [
-            (0x1,   0xa, DAC.C_REF),
-            (0x123, 0x1, DAC.C_CONVERT),
-            (0xabc, 0x2, DAC.C_CONVERT),
-            (0xfff, 0x4, DAC.C_CONVERT),
-            (0x000, 0x8, DAC.C_CONVERT),
+            cat(0x1,   0xa, C_REF),
+            cat(0x123, 0x1, C_CONVERT),
+            cat(0xabc, 0x2, C_CONVERT),
+            cat(0xfff, 0x4, C_CONVERT),
+            cat(0x000, 0x8, C_CONVERT),
         ]
 
-        for cmd in cmds:
-            yield from tx(*cmd)
+        for d in cmds:
+            yield from tx(d)
         yield from wait_ready()
         yield from tick()
 
@@ -163,14 +173,14 @@ def sim(m):
 
     sim.add_clock(1 / 100e6)
     sim.add_sync_process(proc)
-    with sim.write_vcd("ad5628.vcd", traces=m.ports()):
+    with sim.write_vcd("spi.vcd", traces=m.ports()):
         sim.run()
 
 #
 #
 
 if __name__ == "__main__":
-    dut = DAC()
+    dut = SPI(width=32)
     sim(dut)
 
-# FIN
+# FIN#   FIN
