@@ -10,13 +10,41 @@ from amaranth.build import *
 from cordic import CordicRotate
 
 from pll import get_pll
-from ad5628 import DAC
+from spi import SpiInit
 
 #
 #
 
 from amaranth_boards.ulx3s import ULX3S_85F_Platform as Platform
 
+#
+#
+
+adc_init = [
+    0x0806, # ADC Mode control
+    0x1000, # ADC Config Reg (0x1004 for echo)
+    0x9800, # Range
+    0x8800, # UniPolar
+    0x9000, # BiPolar
+]
+
+class ADC(SpiInit):
+
+    def __init__(self, init=adc_init, divider=1):
+        SpiInit.__init__(self, width=16, init=init, divider=divider)
+
+#
+#
+
+dac_init = [
+    0xf80000ff, # cmd=C_REF enable external reference
+]
+
+class DAC(SpiInit):
+
+    def __init__(self, init=dac_init, divider=1):
+        SpiInit.__init__(self, width=32, init=init, divider=divider)
+    
 #
 #
 
@@ -32,7 +60,7 @@ class Application(Elaboratable):
         self.cwidth = 12
         self.cordic = CordicRotate(a_width=self.cwidth, o_width=self.cwidth)
 
-        self.dac = DAC()
+        self.dac = DAC(divider=2)
 
         self.clock_speed = 100e6
         self.samples = 32
@@ -92,26 +120,12 @@ class Application(Elaboratable):
 
         # SPI DAC
 
-        dac_init = Signal(reset=1)
+        cmd = 0xf300_00ff
+        m.d.comb += self.dac.data.eq(cmd + ((0xfff & self.cordic.x) << 8))
 
         with m.If(self.cordic.ready & self.dac.ready & (self.state == State.CORDIC)):
             # Tx command
             m.d.sync += self.dac.start.eq(1)
-
-            with m.If(dac_init):
-                m.d.sync += [
-                    self.dac.cmd.eq(self.dac.C_REF),
-                    self.dac.addr.eq(0),
-                    self.dac.data.eq(0),
-                    dac_init.eq(0),
-                ]
-
-            with m.Else():
-                m.d.sync += [
-                    self.dac.cmd.eq(self.dac.C_CONVERT),
-                    self.dac.addr.eq(0),
-                    self.dac.data.eq(self.cordic.x),
-                ]
 
         with m.If(self.dac.start):
             m.d.sync += [
