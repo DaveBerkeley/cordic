@@ -208,17 +208,14 @@ class Application(Elaboratable):
         state = Cat(ftdi.nrts, ftdi.ndtr)
 
         with m.Switch(state):
-            with m.Case(3):
-                m.d.comb += [ wifi.en.eq(1), wifi.gpio0.eq(1), ]
             with m.Case(0):
                 m.d.comb += [ wifi.en.eq(1), wifi.gpio0.eq(1), ]
-            with m.Case(2):
-                m.d.comb += [ wifi.en.eq(0), wifi.gpio0.eq(1), ]
             with m.Case(1):
                 m.d.comb += [ wifi.en.eq(1), wifi.gpio0.eq(0), ]
-
-        #gpio2 = platform.request("gpio", 2)
-        #m.d.comb += gpio2.eq(wifi.gpio0)
+            with m.Case(2):
+                m.d.comb += [ wifi.en.eq(0), wifi.gpio0.eq(1), ]
+            with m.Case(3):
+                m.d.comb += [ wifi.en.eq(1), wifi.gpio0.eq(1), ]
 
         m.d.comb += [
             platform.request("led", 0).eq(~wifi.rxd),
