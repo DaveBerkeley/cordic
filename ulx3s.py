@@ -34,7 +34,7 @@ class ADC(SpiInit):
         SpiInit.__init__(self, width=16, init=init, divider=divider)
 
 #
-#
+#   AD5628 12-bit SPI DAC
 
 dac_init = [
     0xf80000ff, # cmd=C_REF enable external reference
@@ -60,7 +60,7 @@ class Application(Elaboratable):
         self.cwidth = 12
         self.cordic = CordicRotate(a_width=self.cwidth, o_width=self.cwidth)
 
-        self.dac = DAC(divider=2)
+        self.dac = DAC(divider=1)
 
         self.clock_speed = 100e6
         self.samples = 32
@@ -68,6 +68,11 @@ class Application(Elaboratable):
         self.period = int(self.clock_speed / (self.us * self.samples))
         self.sample_period = Signal(range(self.period))
         self.phase = Signal(self.cwidth)
+
+        # swept freq generator
+        self.note = Signal(range(4))
+        self.octave = Signal(range(16))
+        self.theta = Signal(range(12 + 16))
 
         self.state = Signal(State, reset=State.IDLE)
 
@@ -81,12 +86,12 @@ class Application(Elaboratable):
 
         self.set_clock(m, platform, self.clock_speed)
 
-        for i in range(8):
-            s = platform.request("led", i)
-            try:
-                m.d.sync += s.eq(self.sample_period[i])
-            except IndexError:
-                break
+        #for i in range(8):
+        #    s = platform.request("led", i)
+        #    try:
+        #        m.d.sync += s.eq(self.sample_period[i])
+        #    except IndexError:
+        #        break
 
         m.d.sync += [
             self.sample_period.eq(self.sample_period + 1),
@@ -161,7 +166,68 @@ class Application(Elaboratable):
             #platform.request("test", 3).eq(self.cordic.x[3]),
         ]
 
+        self.add_passthru(m, platform)
+
         return m
+
+    def add_passthru(self, m, platform):
+        #
+        # see
+        # https://github.com/emard/ulx3s-misc/blob/master/examples/esp32_passthru/proj/hdl/esp32_passthru.v
+        #
+        io = [
+            Resource('ftdi', 0,
+                Subsignal('txd', Pins("M1", dir="i")),
+                Subsignal('rxd', Pins("L4", dir="o")),
+                Subsignal('nrts', Pins("M3", dir="i")),
+                Subsignal('ndtr', Pins("N1", dir="i")),
+                Attrs(IO_TYPE="LVCMOS33")
+            ),
+            Resource('wifi', 0,
+                Subsignal('txd', Pins("K4", dir="i")),
+                Subsignal('rxd', Pins("K3", dir="o")),
+                Subsignal('en', Pins("J5", dir="o")),
+                Subsignal('gpio0', Pins("F1", dir="o")),
+                Attrs(IO_TYPE="LVCMOS33")
+            ),
+            #Resource('gpio', 2, Pins("J3", dir="o"), Attrs(IOSTANDARD="LVCMOS33")),
+            #Resource('gpio', 4, Pins("H1", dir="o"), Attrs(IOSTANDARD="LVCMOS33")),
+            #Resource('gpio', 5, Pins("U5", dir="o"), Attrs(IOSTANDARD="LVCMOS33")),
+            #Resource('gpio', 23, Pins("R5", dir="o"), Attrs(IOSTANDARD="LVCMOS33")),
+        ]
+        platform.add_resources(io)
+
+        wifi = platform.request("wifi", 0)
+        ftdi = platform.request("ftdi", 0)
+
+        m.d.comb += [
+            wifi.rxd.eq(ftdi.txd),
+            ftdi.rxd.eq(wifi.txd),
+        ]
+
+        state = Cat(ftdi.nrts, ftdi.ndtr)
+
+        with m.Switch(state):
+            with m.Case(3):
+                m.d.comb += [ wifi.en.eq(1), wifi.gpio0.eq(1), ]
+            with m.Case(0):
+                m.d.comb += [ wifi.en.eq(1), wifi.gpio0.eq(1), ]
+            with m.Case(2):
+                m.d.comb += [ wifi.en.eq(0), wifi.gpio0.eq(1), ]
+            with m.Case(1):
+                m.d.comb += [ wifi.en.eq(1), wifi.gpio0.eq(0), ]
+
+        #gpio2 = platform.request("gpio", 2)
+        #m.d.comb += gpio2.eq(wifi.gpio0)
+
+        m.d.comb += [
+            platform.request("led", 0).eq(~wifi.rxd),
+            platform.request("led", 1).eq(~ftdi.rxd),
+            platform.request("led", 2).eq(~wifi.gpio0),
+            platform.request("led", 3).eq(~wifi.en),
+            platform.request("led", 4).eq(~ftdi.nrts),
+            platform.request("led", 5).eq(~ftdi.ndtr),
+        ]
 
     def set_clock(self, m, platform, freq, cd_name="sync"):
         PLL = get_pll(platform)
@@ -194,13 +260,14 @@ class Application(Elaboratable):
 
         platform.add_resources(r)
 
-        class SPI:            
-            cs   = platform.request("dac.cs", 0)
-            copi = platform.request("dac.copi", 0)
-            clk  = platform.request("dac.clk", 0)
-            ldac = platform.request("dac.ldac", 0)
+        class SPI:
+            def __init__(self, idx=0):
+                self.cs   = platform.request("dac.cs", idx)
+                self.copi = platform.request("dac.copi", idx)
+                self.clk  = platform.request("dac.clk", idx)
+                self.ldac = platform.request("dac.ldac", idx)
 
-        spi = SPI()
+        spi = SPI(0)
 
         # connect DAC to SPI bus
 
