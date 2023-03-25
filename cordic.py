@@ -21,6 +21,7 @@ class Cordic(Elaboratable):
 
         self.a_width = a_width
         self.o_width = o_width
+        self.X0 = int(0.99 * (1 << o_width) / (self.K * 2))        
 
         # Initial state
         self.x0 = Signal(signed(o_width))
@@ -129,8 +130,7 @@ class CordicRotate(Elaboratable):
 
     def __init__(self, a_width, o_width):
         self.core = Cordic(a_width, o_width)
-
-        self.X0 = int(0.99 * (1 << o_width) / (self.core.K * 2))        
+        self.X0 = self.core.X0
 
         # Input signals
         self.x0 = Signal(signed(o_width))
@@ -203,6 +203,7 @@ class CordicVector(Elaboratable):
 
     def __init__(self, a_width, o_width):
         self.core = Cordic(a_width, o_width)
+        self.X0 = self.core.X0
 
         self.x0 = Signal(signed(o_width))
         self.y0 = Signal(signed(o_width))
